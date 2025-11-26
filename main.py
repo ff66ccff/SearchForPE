@@ -228,6 +228,21 @@ class SearchApp(ctk.CTk):
         self.search_entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
         self.search_entry.bind("<Return>", lambda e: self._search())
         
+        # 清除按钮
+        self.clear_button = ctk.CTkButton(
+            search_inner,
+            text="✕",
+            font=ctk.CTkFont(size=16),
+            width=50,
+            height=50,
+            corner_radius=25,
+            fg_color=("gray80", "gray30"),
+            hover_color=("gray70", "gray40"),
+            text_color=("gray30", "gray80"),
+            command=self._clear_search
+        )
+        self.clear_button.pack(side="left", padx=(0, 10))
+        
         # 搜索按钮
         self.search_button = ctk.CTkButton(
             search_inner,
@@ -396,6 +411,29 @@ class SearchApp(ctk.CTk):
             text=f"📚 题库已加载：共 {count:,} 道题目（判断题 {judge_count:,} 道，选择题 {choice_count:,} 道）"
         )
         self._set_status(f"题库加载完成，共 {count:,} 道题目")
+    
+    def _clear_search(self):
+        """清除搜索框和结果"""
+        self.search_entry.delete(0, "end")
+        self.search_results = []
+        self.current_page = 0
+        
+        # 清空结果区域
+        for widget in self.results_scroll.winfo_children():
+            widget.destroy()
+        
+        # 恢复提示信息
+        count = len(self.questions)
+        judge_count = len(self.judge_questions)
+        choice_count = len(self.choice_questions)
+        self.result_info.configure(
+            text=f"📚 题库已加载：共 {count:,} 道题目（判断题 {judge_count:,} 道，选择题 {choice_count:,} 道）"
+        )
+        self._update_pagination()
+        self._set_status("已清除搜索")
+        
+        # 聚焦到搜索框
+        self.search_entry.focus()
     
     def _search(self):
         """执行搜索 - 优化版本"""
