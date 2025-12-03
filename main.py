@@ -6,7 +6,7 @@
 
 import customtkinter as ctk
 from tkinter import messagebox
-import json
+import sqlite3
 import os
 import sys
 import threading
@@ -49,6 +49,24 @@ class Question:
             user_answer=data.get("user_answer"),
             correct_answer=data.get("correct_answer"),
             question_type=data.get("question_type", "判断题")
+        )
+    
+    @classmethod
+    def from_db_row(cls, row):
+        """从数据库行创建题目对象"""
+        issue, choice, answer = row
+        # 解析选项
+        options = []
+        if choice:
+            # 选项格式: "A  xxx\nB xxx\nC xxx\nD xxx"
+            options = [opt.strip() for opt in choice.strip().split('\n') if opt.strip()]
+        
+        question_type = "选择题" if options else "判断题"
+        return cls(
+            question_text=issue,
+            options=options,
+            correct_answer=answer,
+            question_type=question_type
         )
 
 
@@ -370,19 +388,22 @@ class SearchApp(ctk.CTk):
         
         def load():
             try:
-                json_path = get_resource_path("questions.json")
+                db_path = get_resource_path("question.db")
                 
-                if os.path.exists(json_path):
-                    with open(json_path, 'r', encoding='utf-8') as f:
-                        data = json.load(f)
+                if os.path.exists(db_path):
+                    conn = sqlite3.connect(db_path)
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT ISSUE, CHOICE, ANSWER FROM QUESTIONS")
+                    rows = cursor.fetchall()
+                    conn.close()
                     
                     # 批量创建对象并预分类
                     questions = []
                     judge_questions = []
                     choice_questions = []
                     
-                    for d in data:
-                        q = Question.from_dict(d)
+                    for row in rows:
+                        q = Question.from_db_row(row)
                         questions.append(q)
                         if q.question_type == "判断题":
                             judge_questions.append(q)
@@ -395,7 +416,7 @@ class SearchApp(ctk.CTk):
                     
                     self.after(0, lambda: self._on_questions_loaded())
                 else:
-                    self.after(0, lambda: self._show_error("找不到题库文件 questions.json"))
+                    self.after(0, lambda: self._show_error("找不到题库文件 question.db"))
             except Exception as e:
                 self.after(0, lambda: self._show_error(f"加载题库失败: {str(e)}"))
         

@@ -12,7 +12,7 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[
-        ('questions.json', '.'),  # 题库文件
+        ('question.db', '.'),  # 题库数据库文件
         (ctk_path, 'customtkinter'),  # customtkinter 资源
     ],
     hiddenimports=[
