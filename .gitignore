@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.spec.bak
+
+# Build intermediate objects
+build/
+*.o
+*.res
+*.obj
+
+# Temp files
+*.tmp
+temp/

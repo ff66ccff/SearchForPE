@@ -1,0 +1,4 @@
+#include "resource.h"
+#define RT_MANIFEST 24
+1 RT_MANIFEST "app.manifest"
+IDR_QUESTION_DB RCDATA "../question.db"
