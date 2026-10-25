@@ -44,6 +44,13 @@ std::wstring Database::ResolveDatabasePath() {
                 wchar_t tempPath[MAX_PATH] = {0};
                 GetTempPathW(MAX_PATH, tempPath);
                 std::wstring tempDb = std::wstring(tempPath) + L"SearchForPE_embedded.db";
+                // Reuse the previously unpacked copy when it is byte-identical in
+                // size: saves ~1.6 MB of disk I/O on every cold start.
+                WIN32_FILE_ATTRIBUTE_DATA info = {};
+                if (GetFileAttributesExW(tempDb.c_str(), GetFileExInfoStandard, &info) &&
+                    info.nFileSizeHigh == 0 && info.nFileSizeLow == size) {
+                    return tempDb;
+                }
                 FILE* fp = _wfopen(tempDb.c_str(), L"wb");
                 if (fp) {
                     fwrite(pData, 1, size, fp);
