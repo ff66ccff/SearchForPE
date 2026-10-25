@@ -1,5 +1,11 @@
 # 🏃 体育理论题库查询系统 · v3
 
+[![Release](https://img.shields.io/github/v/release/ff66ccff/SearchForPE?label=release)](https://github.com/ff66ccff/SearchForPE/releases/latest)
+[![Platform](https://img.shields.io/badge/platform-Windows%20x64-2f6feb)](https://github.com/ff66ccff/SearchForPE/releases/latest)
+[![Size](https://img.shields.io/badge/size-4.39%20MB-0e9f6e)](https://github.com/ff66ccff/SearchForPE/releases/latest)
+
+> 下载：前往 [Releases](https://github.com/ff66ccff/SearchForPE/releases/latest) 获取 `SportExamSearch-v3.0.0.exe`（应用标题为「体育理论题库查询」）。
+
 Windows 单文件绿色便携应用：内置 6,108 道体育理论题库（判断 3,167 / 单选 2,494 / 多选 433），
 输入关键词即输即显，答案直达，无需安装、无外部依赖、无网络。
 
