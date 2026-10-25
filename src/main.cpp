@@ -1,992 +1,954 @@
 #include "common.h"
 #include "theme.h"
+#include "fonts.h"
+#include "gfx.h"
+#include "result_list.h"
 #include "database.h"
 #include "search.h"
-#include "ui_card.h"
 #include "resource.h"
+#include <cstdarg>
 
-#pragma comment(lib, "gdiplus")
-#pragma comment(lib, "comctl32")
-#pragma comment(lib, "dwmapi")
-#pragma comment(lib, "uxtheme")
+namespace {
 
-// Window Dimensions & Layout Constants (Base at 96 DPI)
-const int BASE_WINDOW_W = 1040;
-const int BASE_WINDOW_H = 780;
-const int BASE_HEADER_H = 72;
-const int BASE_CONTROLS_H = 92;
-const int BASE_STATUS_H = 34;
-const int BASE_PAGINATION_H = 48;
+// Layout constants in DIPs, matching design/layout.md
+constexpr float kPadX            = 24.0f;
+constexpr float kFieldY          = 14.0f;
+constexpr float kFieldH          = 36.0f;
+constexpr float kFieldRadius     = 10.0f;
+constexpr float kFieldTextLeft   = 40.0f;
+constexpr float kFieldClearRight = 6.0f;
+constexpr float kThemeBtnSize    = 32.0f;
+constexpr float kFilterTop       = 64.0f;
+constexpr float kFilterInnerTop  = 8.0f;
+constexpr float kFilterH         = 30.0f;
+constexpr float kFilterPadX      = 13.0f;
+constexpr float kFilterGap       = 8.0f;
+constexpr float kHairlineY       = 110.0f;
+constexpr float kStatusTop       = 110.0f;
+constexpr float kStatusH         = 30.0f;
+constexpr float kPanelTop        = 140.0f;
+constexpr float kPanelBottomGap  = 16.0f;
+constexpr float kPanelMaxWidth   = 1000.0f;
+constexpr float kPanelPadX       = 20.0f;
+constexpr float kFabSize         = 32.0f;
+constexpr float kFabMargin       = 24.0f;
+constexpr float kSwitchW         = 30.0f;
+constexpr float kSwitchH         = 17.0f;
+constexpr float kWheelStep       = 112.0f;
 
-// IDs for controls and timers
-const int ID_SEARCH_EDIT   = 1001;
-const int ID_CLEAR_BTN     = 1002;
-const int ID_SEARCH_BTN    = 1003;
-const int ID_TIMER_DEBOUNCE = 2001;
-const int ID_TIMER_FEEDBACK = 2002;
+constexpr UINT_PTR kTimerAnim    = 1;
+constexpr UINT_PTR kTimerSearch  = 2;
+constexpr UINT_PTR kTimerPreload = 3;
+constexpr int kSearchDebounceMs  = 35;
+constexpr int kAnimIntervalMs    = 10;
 
-class MainWindow {
+constexpr int ID_SEARCH_EDIT     = 1001;
+
+}  // namespace
+
+class App {
 public:
-    MainWindow() 
-        : m_theme(GetLightTheme())
-        , m_dpi(96)
-        , m_currentPage(0)
-        , m_pageSize(20)
-        , m_scrollY(0)
-        , m_maxScrollY(0)
-        , m_searchInOptions(true)
-        , m_typeFilter(L"全部")
-    {}
-
     bool Create(HINSTANCE hInstance, int nCmdShow);
     int Run();
 
 private:
-    static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
-    LRESULT HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+    static LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
+    static LRESULT CALLBACK EditProc(HWND, UINT, WPARAM, LPARAM);
+    LRESULT HandleMessage(HWND, UINT, WPARAM, LPARAM);
 
-    void UpdateDpi(UINT dpi);
-    void UpdateTheme(bool dark);
-    void LayoutControls();
-    void RunSearch(bool resetPage = true);
-    void UpdatePageCards();
-    void SetPage(int page);
-    void ScrollTo(int newY);
+    void ApplyDpi(UINT dpi);
+    void SetTheme(bool dark);
+    void ApplyWindowChrome();
+    void Layout();
+    void RebuildEditFont();
+    void UpdateEditColors();
+    void FocusSearch();
 
-    void OnPaint(HDC hdc);
-    void OnLButtonDown(int x, int y);
-    void OnMouseMove(int x, int y);
+    void UpdateSearchResults();
+    void StartAnimating();
+    void StopAnimatingIfIdle();
+    bool AnimTick();
+
+    void Paint();
+    void PaintSearchField();
+    void PaintToolbar();
+    void PaintStatusRow();
+    void PaintEmptyState();
+    void PaintBackToTop();
+
+    void OnMouseMove(int px, int py);
+    void OnLButtonDown(int px, int py);
+    void OnLButtonUp(int px, int py);
     void OnMouseWheel(short delta);
+    void OnKeyDown(WPARAM key, bool ctrl);
 
-private:
-    HWND m_hwnd = NULL;
-    HWND m_hwndEdit = NULL;
-    HFONT m_hFontEdit = NULL;
-    HBRUSH m_hBrControls = NULL;
-    HBRUSH m_hBrEdit = NULL;
+    int  HitTestPill(float x, float y) const;
+    bool HitTestThemeButton(float x, float y) const;
+    bool HitTestClearButton(float x, float y) const;
+    bool HitTestSwitch(float x, float y) const;
+    bool HitTestField(float x, float y) const;
+    bool HitTestBackToTop(float x, float y) const;
+    RectF ClearButtonRect() const;
 
-    UINT m_dpi;
-    ColorScheme m_theme;
+    float DipX(int px) const { return PixelsToDip(px, m_dpi); }
+    float DipY(int py) const { return PixelsToDip(py, m_dpi); }
+
+    float DrawTextBlock(Gfx& gfx, const std::wstring& text, TextRole role, float x, float y, Color color);
+    void DrawTextCentered(Gfx& gfx, const std::wstring& text, TextRole role, const RectF& box, Color color);
+    void DrawTextLeftVCenter(Gfx& gfx, const std::wstring& text, TextRole role, float x, float y, float h,
+                             Color color);
+    float MeasureText(const std::wstring& text, TextRole role) const { return m_fonts.MeasureWidth(text, role); }
+    void DrawEditPlaceholderIfNeeded();
+
+    HINSTANCE m_hInstance = nullptr;
+    HWND m_hwnd = nullptr;
+    HWND m_edit = nullptr;
+    WNDPROC m_editProc = nullptr;
+    HFONT m_editFont = nullptr;
+    HBRUSH m_editBrush = nullptr;
+
+    UINT m_dpi = 96;
+    float m_dipW = 0.0f;
+    float m_dipH = 0.0f;
+
+    Theme m_theme;
+    FontManager m_fonts;
+    Gfx m_gfx;
     Database m_db;
-    SearchResult m_searchResult;
+    ResultList m_list;
+    SearchResult m_search;
 
-    // Filter & Paging state
-    std::wstring m_typeFilter;
-    bool m_searchInOptions;
-    int m_currentPage;
-    int m_pageSize;
-    int m_totalPages = 1;
+    std::wstring m_typeFilter = L"全部";
+    bool m_searchInOptions = true;
 
-    // Scrolling & Layout
-    float m_scrollY;
-    float m_maxScrollY;
-    std::vector<CardLayout> m_cardLayouts;
-
-    // Interactive button rects in Header/Controls/Pagination
-    Gdiplus::RectF m_rcThemeBtn;
-    Gdiplus::RectF m_rcFilterAll;
-    Gdiplus::RectF m_rcFilterJudge;
-    Gdiplus::RectF m_rcFilterChoice;
-    Gdiplus::RectF m_rcOptionToggle;
-    Gdiplus::RectF m_rcPageSize20;
-    Gdiplus::RectF m_rcPageSize50;
-    Gdiplus::RectF m_rcPageSize100;
-    
-    Gdiplus::RectF m_rcPagePrev;
-    Gdiplus::RectF m_rcPageNext;
-    Gdiplus::RectF m_rcPageFirst;
-    Gdiplus::RectF m_rcPageLast;
-
-    // Hover states
+    int m_hoverPill = -1;
     bool m_hoverThemeBtn = false;
-    bool m_hoverFilterAll = false;
-    bool m_hoverFilterJudge = false;
-    bool m_hoverFilterChoice = false;
-    bool m_hoverOptionToggle = false;
-    bool m_hoverPagePrev = false;
-    bool m_hoverPageNext = false;
-    bool m_hoverPageFirst = false;
-    bool m_hoverPageLast = false;
+    bool m_hoverClear = false;
+    bool m_hoverSwitch = false;
+    bool m_hoverBackToTop = false;
+    bool m_hoverField = false;
 
-    std::wstring m_statusMsg = L"就绪";
+    RectF m_fieldRect;
+    RectF m_themeBtnRect;
+    RectF m_pillRects[3];
+    RectF m_switchRect;
+    RectF m_fabRect;
+    RectF m_panelRect;
+
+    std::chrono::steady_clock::time_point m_lastTick;
 };
 
-bool MainWindow::Create(HINSTANCE hInstance, int nCmdShow) {
-    HMODULE hUser32 = GetModuleHandleW(L"user32.dll");
-    if (hUser32) {
-        typedef BOOL (WINAPI *SetProcessDpiAwarenessContextProc)(DPI_AWARENESS_CONTEXT);
-        auto setDpi = (SetProcessDpiAwarenessContextProc)GetProcAddress(hUser32, "SetProcessDpiAwarenessContext");
-        if (setDpi) {
-            setDpi(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-        }
+// ------------------------------------------------------------------ window
+bool App::Create(HINSTANCE hInstance, int nCmdShow) {
+    m_hInstance = hInstance;
+
+    HMODULE user32 = GetModuleHandleW(L"user32.dll");
+    if (user32) {
+        typedef BOOL(WINAPI * SetDpiProc)(DPI_AWARENESS_CONTEXT);
+        auto setDpi = (SetDpiProc)GetProcAddress(user32, "SetProcessDpiAwarenessContext");
+        if (setDpi) setDpi(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     }
 
-    WNDCLASSEXW wc = {0};
+    WNDCLASSEXW wc = {};
     wc.cbSize = sizeof(wc);
     wc.style = CS_HREDRAW | CS_VREDRAW;
-    wc.lpfnWndProc = MainWindow::WndProc;
+    wc.lpfnWndProc = App::WndProc;
     wc.hInstance = hInstance;
-    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
-    wc.lpszClassName = L"SportExamSearchMainWnd";
-    RegisterClassExW(&wc);
+    wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+    wc.hbrBackground = nullptr;
+    wc.lpszClassName = L"SportExamSearchWnd";
+    if (!RegisterClassExW(&wc)) return false;
 
-    HDC screen = GetDC(NULL);
-    m_dpi = GetDeviceCaps(screen, LOGPIXELSX);
-    ReleaseDC(NULL, screen);
+    m_theme = MakeLightTheme();
+    if (!m_fonts.Init()) return false;
+    if (!m_gfx.Init()) return false;
+    m_list.Init(&m_fonts);
 
-    int winW = Scale(BASE_WINDOW_W, m_dpi);
-    int winH = Scale(BASE_WINDOW_H, m_dpi);
+    HDC screen = GetDC(nullptr);
+    m_dpi = (UINT)GetDeviceCaps(screen, LOGPIXELSX);
+    ReleaseDC(nullptr, screen);
 
-    int screenW = GetSystemMetrics(SM_CXSCREEN);
-    int screenH = GetSystemMetrics(SM_CYSCREEN);
-    int posX = (std::max)(0, (screenW - winW) / 2);
-    int posY = (std::max)(0, (screenH - winH) / 2);
+    // Size the outer window so the *client* area is exactly 1180x840 DIP.
+    RECT desired = { 0, 0, DipToPixels(1180.0f, m_dpi), DipToPixels(840.0f, m_dpi) };
+    DWORD style = WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN;
+    typedef BOOL(WINAPI * AdjustProc)(LPRECT, DWORD, BOOL, DWORD, UINT);
+    bool adjusted = false;
+    if (HMODULE u32 = GetModuleHandleW(L"user32.dll")) {
+        auto adjust = (AdjustProc)GetProcAddress(u32, "AdjustWindowRectExForDpi");
+        if (adjust) adjusted = adjust(&desired, style, FALSE, 0, m_dpi) == TRUE;
+    }
+    if (!adjusted) AdjustWindowRectEx(&desired, style, FALSE, 0);
+    int winW = desired.right - desired.left;
+    int winH = desired.bottom - desired.top;
 
-    m_hwnd = CreateWindowExW(
-        0,
-        wc.lpszClassName,
-        L"体育理论题库查询系统 - 极速便携版",
-        WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
-        posX, posY, winW, winH,
-        NULL, NULL, hInstance, this
-    );
+    RECT workArea = { 0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN) };
+    SystemParametersInfoW(SPI_GETWORKAREA, 0, &workArea, 0);
+    int posX = workArea.left + ((workArea.right - workArea.left) - winW) / 2;
+    int posY = workArea.top + ((workArea.bottom - workArea.top) - winH) / 2;
 
+    m_hwnd = CreateWindowExW(0, wc.lpszClassName, L"体育理论题库查询", style, posX, posY,
+                             (std::max)(winW, 600), (std::max)(winH, 400), nullptr, nullptr, hInstance, this);
     if (!m_hwnd) return false;
 
-    // Load Database
     std::wstring dbMsg;
     if (!m_db.Load(dbMsg)) {
         MessageBoxW(m_hwnd, dbMsg.c_str(), L"题库加载提示", MB_ICONWARNING);
     }
 
-    UpdateTheme(false);
-    RunSearch(true);
+    Layout();
+    ApplyWindowChrome();
+    UpdateSearchResults();
 
     ShowWindow(m_hwnd, nCmdShow);
     UpdateWindow(m_hwnd);
-
-    if (m_hwndEdit) {
-        SetFocus(m_hwndEdit);
-    }
-
+    FocusSearch();
     return true;
 }
 
-void MainWindow::UpdateDpi(UINT dpi) {
-    m_dpi = dpi;
-    if (m_hFontEdit) {
-        DeleteObject(m_hFontEdit);
-    }
-    m_hFontEdit = CreateFontW(
-        -Scale(15, m_dpi), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Microsoft YaHei UI"
-    );
-    if (m_hwndEdit) {
-        SendMessageW(m_hwndEdit, WM_SETFONT, (WPARAM)m_hFontEdit, TRUE);
-    }
-    LayoutControls();
-    UpdatePageCards();
-}
-
-void MainWindow::UpdateTheme(bool dark) {
-    m_theme = dark ? GetDarkTheme() : GetLightTheme();
-
-    BOOL darkModeAttr = dark ? TRUE : FALSE;
-    DwmSetWindowAttribute(m_hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &darkModeAttr, sizeof(darkModeAttr));
-
-    if (m_hBrControls) DeleteObject(m_hBrControls);
-    if (m_hBrEdit) DeleteObject(m_hBrEdit);
-    m_hBrControls = CreateSolidBrush(m_theme.crBgControls);
-    m_hBrEdit = CreateSolidBrush(m_theme.crSearchBg);
-
-    if (m_hwndEdit) {
-        InvalidateRect(m_hwndEdit, NULL, TRUE);
-    }
-    InvalidateRect(m_hwnd, NULL, FALSE);
-}
-
-void MainWindow::LayoutControls() {
-    if (!m_hwnd) return;
-    RECT rc;
-    GetClientRect(m_hwnd, &rc);
-    int clientW = rc.right - rc.left;
-    int clientH = rc.bottom - rc.top;
-
-    float headerH = (float)Scale(BASE_HEADER_H, m_dpi);
-    float controlsH = (float)Scale(BASE_CONTROLS_H, m_dpi);
-    float paginationH = (float)Scale(BASE_PAGINATION_H, m_dpi);
-
-    // Theme Button in Header (top right)
-    float themeBtnW = (float)Scale(96, m_dpi);
-    float themeBtnH = (float)Scale(32, m_dpi);
-    m_rcThemeBtn = Gdiplus::RectF(
-        (float)clientW - themeBtnW - (float)Scale(24, m_dpi),
-        (headerH - themeBtnH) / 2.0f,
-        themeBtnW, themeBtnH
-    );
-
-    // Search Edit in Controls row 1
-    int editX = Scale(24, m_dpi);
-    int editY = (int)headerH + Scale(12, m_dpi);
-    int btnSearchW = Scale(70, m_dpi);
-    int btnClearW = Scale(42, m_dpi);
-    int editW = clientW - editX - btnSearchW - btnClearW - Scale(24 + 16, m_dpi);
-    int editH = Scale(38, m_dpi);
-
-    if (!m_hwndEdit) {
-        m_hwndEdit = CreateWindowExW(
-            WS_EX_CLIENTEDGE,
-            L"EDIT",
-            L"",
-            WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
-            editX, editY, editW, editH,
-            m_hwnd, (HMENU)(INT_PTR)ID_SEARCH_EDIT,
-            GetModuleHandle(NULL), NULL
-        );
-        SendMessageW(m_hwndEdit, EM_SETCUEBANNER, TRUE, (LPARAM)L"输入关键词实时检索题目（空格支持多词组合，即输即显）...");
-    } else {
-        SetWindowPos(m_hwndEdit, NULL, editX, editY, editW, editH, SWP_NOZORDER);
-    }
-
-    // Filter Buttons in Controls row 2
-    float row2Y = headerH + (float)Scale(54, m_dpi);
-    float filterW = (float)Scale(92, m_dpi);
-    float filterH = (float)Scale(28, m_dpi);
-    float curX = (float)Scale(24, m_dpi);
-
-    m_rcFilterAll = Gdiplus::RectF(curX, row2Y, filterW, filterH);
-    curX += filterW + (float)Scale(8, m_dpi);
-    m_rcFilterJudge = Gdiplus::RectF(curX, row2Y, filterW + (float)Scale(10, m_dpi), filterH);
-    curX += filterW + (float)Scale(18, m_dpi);
-    m_rcFilterChoice = Gdiplus::RectF(curX, row2Y, filterW + (float)Scale(10, m_dpi), filterH);
-    curX += filterW + (float)Scale(24, m_dpi);
-
-    // Search in options checkbox/toggle
-    float optToggleW = (float)Scale(150, m_dpi);
-    m_rcOptionToggle = Gdiplus::RectF(curX, row2Y, optToggleW, filterH);
-    curX += optToggleW + (float)Scale(24, m_dpi);
-
-    // Page size buttons on the right of row 2
-    float psBtnW = (float)Scale(46, m_dpi);
-    float psRight = (float)clientW - (float)Scale(24, m_dpi);
-    m_rcPageSize100 = Gdiplus::RectF(psRight - psBtnW, row2Y, psBtnW, filterH);
-    m_rcPageSize50 = Gdiplus::RectF(psRight - (psBtnW * 2.0f) - (float)Scale(4, m_dpi), row2Y, psBtnW, filterH);
-    m_rcPageSize20 = Gdiplus::RectF(psRight - (psBtnW * 3.0f) - (float)Scale(8, m_dpi), row2Y, psBtnW, filterH);
-
-    // Pagination buttons at bottom
-    float pagY = (float)clientH - paginationH + (float)Scale(8, m_dpi);
-    float pagBtnW = (float)Scale(74, m_dpi);
-    float pagBtnH = (float)Scale(32, m_dpi);
-    float pagRight = (float)clientW - (float)Scale(24, m_dpi);
-
-    m_rcPageLast = Gdiplus::RectF(pagRight - (float)Scale(54, m_dpi), pagY, (float)Scale(54, m_dpi), pagBtnH);
-    m_rcPageNext = Gdiplus::RectF(m_rcPageLast.X - pagBtnW - (float)Scale(6, m_dpi), pagY, pagBtnW, pagBtnH);
-    m_rcPagePrev = Gdiplus::RectF(m_rcPageNext.X - pagBtnW - (float)Scale(110, m_dpi), pagY, pagBtnW, pagBtnH);
-    m_rcPageFirst = Gdiplus::RectF(m_rcPagePrev.X - (float)Scale(54, m_dpi) - (float)Scale(6, m_dpi), pagY, (float)Scale(54, m_dpi), pagBtnH);
-}
-
-void MainWindow::RunSearch(bool resetPage) {
-    wchar_t buf[512] = {0};
-    if (m_hwndEdit) {
-        GetWindowTextW(m_hwndEdit, buf, 512);
-    }
-
-    SearchFilter filter;
-    filter.query = buf;
-    filter.typeFilter = m_typeFilter;
-    filter.searchInOptions = m_searchInOptions;
-
-    m_searchResult = SearchEngine::Execute(m_db.GetQuestions(), filter);
-
-    m_totalPages = (std::max)(1, ((int)m_searchResult.items.size() + m_pageSize - 1) / m_pageSize);
-    if (resetPage) {
-        m_currentPage = 0;
-        m_scrollY = 0;
-    } else {
-        if (m_currentPage >= m_totalPages) m_currentPage = m_totalPages - 1;
-    }
-
-    size_t start = m_currentPage * m_pageSize;
-    size_t end = (std::min)(start + m_pageSize, m_searchResult.items.size());
-
-    wchar_t statusBuf[256];
-    if (m_searchResult.items.empty()) {
-        swprintf(statusBuf, 256, L"未找到相关题目 (用时 %.2f ms)", m_searchResult.elapsedMs);
-    } else {
-        swprintf(statusBuf, 256, L"共找到 %zu 道题目 (用时 %.2f ms) · 当前显示第 %zu - %zu 题", 
-                 m_searchResult.items.size(), m_searchResult.elapsedMs, start + 1, end);
-    }
-    m_statusMsg = statusBuf;
-
-    UpdatePageCards();
-    InvalidateRect(m_hwnd, NULL, FALSE);
-}
-
-void MainWindow::UpdatePageCards() {
-    if (!m_hwnd) return;
-    RECT rc;
-    GetClientRect(m_hwnd, &rc);
-    int clientW = rc.right - rc.left;
-    int clientH = rc.bottom - rc.top;
-
-    float cardX = (float)Scale(24, m_dpi);
-    float cardW = (float)clientW - (cardX * 2.0f);
-    float gap = (float)Scale(14, m_dpi);
-
-    size_t start = m_currentPage * m_pageSize;
-    size_t count = (std::min)((size_t)m_pageSize, m_searchResult.items.size() - (std::min)(m_searchResult.items.size(), start));
-
-    HDC hdc = GetDC(m_hwnd);
-    {
-        Gdiplus::Graphics g(hdc);
-        float endY = CardRenderer::MeasurePageCards(
-            g, m_searchResult.items, start, count,
-            cardX, cardW, 0.0f, gap, m_dpi, m_cardLayouts
-        );
-
-        float headerTotalH = (float)Scale(BASE_HEADER_H + BASE_CONTROLS_H + BASE_STATUS_H, m_dpi);
-        float pagH = (float)Scale(BASE_PAGINATION_H, m_dpi);
-        float visibleH = (float)clientH - headerTotalH - pagH;
-
-        m_maxScrollY = (std::max)(0.0f, endY - visibleH);
-        if (m_scrollY > m_maxScrollY) m_scrollY = m_maxScrollY;
-    }
-    ReleaseDC(m_hwnd, hdc);
-}
-
-void MainWindow::SetPage(int page) {
-    if (page < 0) page = 0;
-    if (page >= m_totalPages) page = m_totalPages - 1;
-    if (m_currentPage != page) {
-        m_currentPage = page;
-        m_scrollY = 0;
-        
-        size_t start = m_currentPage * m_pageSize;
-        size_t end = (std::min)(start + m_pageSize, m_searchResult.items.size());
-        wchar_t statusBuf[256];
-        swprintf(statusBuf, 256, L"共找到 %zu 道题目 (用时 %.2f ms) · 当前显示第 %zu - %zu 题", 
-                 m_searchResult.items.size(), m_searchResult.elapsedMs, start + 1, end);
-        m_statusMsg = statusBuf;
-
-        UpdatePageCards();
-        InvalidateRect(m_hwnd, NULL, FALSE);
-    }
-}
-
-void MainWindow::ScrollTo(int newY) {
-    float clamped = (std::max)(0.0f, (std::min)((float)newY, m_maxScrollY));
-    if (m_scrollY != clamped) {
-        m_scrollY = clamped;
-        InvalidateRect(m_hwnd, NULL, FALSE);
-    }
-}
-
-void MainWindow::OnPaint(HDC hdc) {
-    RECT rc;
-    GetClientRect(m_hwnd, &rc);
-    int width = rc.right - rc.left;
-    int height = rc.bottom - rc.top;
-    if (width <= 0 || height <= 0) return;
-
-    HDC memDC = CreateCompatibleDC(hdc);
-    HBITMAP memBmp = CreateCompatibleBitmap(hdc, width, height);
-    HGDIOBJ oldBmp = SelectObject(memDC, memBmp);
-
-    {
-        Gdiplus::Graphics g(memDC);
-        g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
-        g.SetTextRenderingHint(Gdiplus::TextRenderingHintClearTypeGridFit);
-
-        // 1. Fill entire window background
-        Gdiplus::SolidBrush brWin(m_theme.bgWindow);
-        g.FillRectangle(&brWin, 0, 0, width, height);
-
-        float headerH = (float)Scale(BASE_HEADER_H, m_dpi);
-        float controlsH = (float)Scale(BASE_CONTROLS_H, m_dpi);
-        float statusH = (float)Scale(BASE_STATUS_H, m_dpi);
-        float pagH = (float)Scale(BASE_PAGINATION_H, m_dpi);
-
-        // 2. Draw Header
-        Gdiplus::SolidBrush brHeader(m_theme.bgHeader);
-        g.FillRectangle(&brHeader, 0.0f, 0.0f, (float)width, headerH);
-        Gdiplus::Pen penBorder(m_theme.borderCard, 1.0f);
-        g.DrawLine(&penBorder, 0.0f, headerH, (float)width, headerH);
-
-        // App Logo Icon Badge
-        float logoX = (float)Scale(24, m_dpi);
-        float logoY = (float)Scale(18, m_dpi);
-        float logoSize = (float)Scale(34, m_dpi);
-        Gdiplus::RectF rcLogo(logoX, logoY, logoSize, logoSize);
-        Gdiplus::SolidBrush brLogoBg(m_theme.accentBlue);
-        CardRenderer::DrawRoundedRect(g, &brLogoBg, nullptr, rcLogo, (float)Scale(8, m_dpi));
-
-        Gdiplus::Font fontLogo(L"Microsoft YaHei UI", (float)Scale(12, m_dpi), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
-        Gdiplus::SolidBrush brWhite(Gdiplus::Color(255, 255, 255, 255));
-        Gdiplus::StringFormat sfCenter;
-        sfCenter.SetAlignment(Gdiplus::StringAlignmentCenter);
-        sfCenter.SetLineAlignment(Gdiplus::StringAlignmentCenter);
-        g.DrawString(L"题", -1, &fontLogo, rcLogo, &sfCenter, &brWhite);
-
-        // Header Title & Subtitle
-        float titleX = logoX + logoSize + (float)Scale(12, m_dpi);
-        Gdiplus::Font fontTitle(L"Microsoft YaHei UI", (float)Scale(17, m_dpi), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
-        Gdiplus::SolidBrush brTitle(m_theme.textPrimary);
-        g.DrawString(L"体育理论题库查询系统", -1, &fontTitle, Gdiplus::PointF(titleX, (float)Scale(14, m_dpi)), &brTitle);
-
-        wchar_t subBuf[256];
-        swprintf(subBuf, 256, L"海量 %d 道题库内置 · 毫秒级即时检索 · 判断 / 单选 / 多选全收录", m_db.GetTotalCount());
-        Gdiplus::Font fontSub(L"Microsoft YaHei UI", (float)Scale(10.5f, m_dpi), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
-        Gdiplus::SolidBrush brSub(m_theme.textSecondary);
-        g.DrawString(subBuf, -1, &fontSub, Gdiplus::PointF(titleX, (float)Scale(42, m_dpi)), &brSub);
-
-        // Header Theme Button
-        Gdiplus::SolidBrush brThemeBtn(m_hoverThemeBtn ? m_theme.btnActionHoverBg : m_theme.btnActionBg);
-        Gdiplus::Pen penThemeBtn(m_hoverThemeBtn ? m_theme.borderCardHover : m_theme.btnActionBorder, 1.0f);
-        CardRenderer::DrawRoundedRect(g, &brThemeBtn, &penThemeBtn, m_rcThemeBtn, (float)Scale(16, m_dpi));
-        
-        Gdiplus::Font fontThemeBtn(L"Microsoft YaHei UI", (float)Scale(11, m_dpi), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
-        Gdiplus::SolidBrush brThemeText(m_theme.textPrimary);
-        g.DrawString(m_theme.isDark ? L"浅色模式" : L"深色模式", -1, &fontThemeBtn, m_rcThemeBtn, &sfCenter, &brThemeText);
-
-        // 3. Draw Controls Bar
-        Gdiplus::SolidBrush brControls(m_theme.bgControls);
-        g.FillRectangle(&brControls, 0.0f, headerH, (float)width, controlsH);
-        g.DrawLine(&penBorder, 0.0f, headerH + controlsH, (float)width, headerH + controlsH);
-
-        // Search Action Buttons next to Search Edit
-        float btnSearchW = (float)Scale(70, m_dpi);
-        float btnClearW = (float)Scale(42, m_dpi);
-        float btnY = headerH + (float)Scale(12, m_dpi);
-        float btnH = (float)Scale(38, m_dpi);
-        float btnSearchX = (float)width - (float)Scale(24, m_dpi) - btnSearchW;
-        float btnClearX = btnSearchX - btnClearW - (float)Scale(8, m_dpi);
-
-        // Clear button (✕)
-        Gdiplus::RectF rcClear(btnClearX, btnY, btnClearW, btnH);
-        Gdiplus::SolidBrush brClearBg(m_theme.btnActionBg);
-        Gdiplus::Pen penClear(m_theme.borderInput, 1.0f);
-        CardRenderer::DrawRoundedRect(g, &brClearBg, &penClear, rcClear, (float)Scale(6, m_dpi));
-        Gdiplus::Font fontClear(L"Microsoft YaHei UI", (float)Scale(13, m_dpi), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
-        Gdiplus::SolidBrush brClearText(m_theme.textSecondary);
-        g.DrawString(L"✕", -1, &fontClear, rcClear, &sfCenter, &brClearText);
-
-        // Search button
-        Gdiplus::RectF rcSearch(btnSearchX, btnY, btnSearchW, btnH);
-        Gdiplus::SolidBrush brSearchBtn(m_theme.accentBlue);
-        CardRenderer::DrawRoundedRect(g, &brSearchBtn, nullptr, rcSearch, (float)Scale(6, m_dpi));
-        Gdiplus::Font fontSearchBtn(L"Microsoft YaHei UI", (float)Scale(12, m_dpi), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
-        g.DrawString(L"搜索", -1, &fontSearchBtn, rcSearch, &sfCenter, &brWhite);
-
-        // Type Filter Pills
-        auto DrawFilterPill = [&](const Gdiplus::RectF& rc, const wchar_t* text, bool selected, bool hovered) {
-            Gdiplus::SolidBrush bg(selected ? m_theme.accentBlue : (hovered ? m_theme.btnActionHoverBg : m_theme.bgCard));
-            Gdiplus::Pen pen(selected ? m_theme.accentBlue : (hovered ? m_theme.borderCardHover : m_theme.borderCard), 1.0f);
-            Gdiplus::SolidBrush txt(selected ? Gdiplus::Color(255, 255, 255, 255) : m_theme.textPrimary);
-            Gdiplus::Font fontPill(L"Microsoft YaHei UI", (float)Scale(11, m_dpi), selected ? Gdiplus::FontStyleBold : Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
-            CardRenderer::DrawRoundedRect(g, &bg, &pen, rc, (float)Scale(6, m_dpi));
-            g.DrawString(text, -1, &fontPill, rc, &sfCenter, &txt);
-        };
-
-        wchar_t fAllStr[64], fJudgeStr[64], fChoiceStr[64];
-        swprintf(fAllStr, 64, L"全部 (%d)", m_db.GetTotalCount());
-        swprintf(fJudgeStr, 64, L"判断题 (%d)", m_db.GetJudgeCount());
-        swprintf(fChoiceStr, 64, L"选择题 (%d)", m_db.GetChoiceCount());
-
-        DrawFilterPill(m_rcFilterAll, fAllStr, m_typeFilter == L"全部", m_hoverFilterAll);
-        DrawFilterPill(m_rcFilterJudge, fJudgeStr, m_typeFilter == L"判断题", m_hoverFilterJudge);
-        DrawFilterPill(m_rcFilterChoice, fChoiceStr, m_typeFilter == L"选择题", m_hoverFilterChoice);
-
-        // Option search checkbox toggle
-        Gdiplus::SolidBrush brOptTxt(m_theme.textPrimary);
-        Gdiplus::Font fontOptToggle(L"Microsoft YaHei UI", (float)Scale(11, m_dpi), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
-        std::wstring optToggleStr = m_searchInOptions ? L"☑ 同时搜索选项内容" : L"☐ 同时搜索选项内容";
-        Gdiplus::StringFormat sfLeftVCenter;
-        sfLeftVCenter.SetAlignment(Gdiplus::StringAlignmentNear);
-        sfLeftVCenter.SetLineAlignment(Gdiplus::StringAlignmentCenter);
-        g.DrawString(optToggleStr.c_str(), -1, &fontOptToggle, m_rcOptionToggle, &sfLeftVCenter, &brOptTxt);
-
-        // Page Size Buttons
-        auto DrawPageSizeBtn = [&](const Gdiplus::RectF& rc, const wchar_t* text, bool selected) {
-            Gdiplus::SolidBrush bg(selected ? m_theme.accentBlue : m_theme.bgCard);
-            Gdiplus::Pen pen(selected ? m_theme.accentBlue : m_theme.borderCard, 1.0f);
-            Gdiplus::SolidBrush txt(selected ? Gdiplus::Color(255, 255, 255, 255) : m_theme.textSecondary);
-            Gdiplus::Font fontPs(L"Microsoft YaHei UI", (float)Scale(10, m_dpi), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
-            CardRenderer::DrawRoundedRect(g, &bg, &pen, rc, (float)Scale(4, m_dpi));
-            g.DrawString(text, -1, &fontPs, rc, &sfCenter, &txt);
-        };
-        DrawPageSizeBtn(m_rcPageSize20, L"20条", m_pageSize == 20);
-        DrawPageSizeBtn(m_rcPageSize50, L"50条", m_pageSize == 50);
-        DrawPageSizeBtn(m_rcPageSize100, L"100条", m_pageSize == 100);
-
-        // 4. Status Bar
-        float statusY = headerH + controlsH;
-        Gdiplus::SolidBrush brStatus(m_theme.bgWindow);
-        g.FillRectangle(&brStatus, 0.0f, statusY, (float)width, statusH);
-        
-        Gdiplus::Font fontStatus(L"Microsoft YaHei UI", (float)Scale(11, m_dpi), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
-        Gdiplus::SolidBrush brStatusTxt(m_theme.textSecondary);
-        Gdiplus::RectF rcStatus((float)Scale(26, m_dpi), statusY, (float)width - (float)Scale(52, m_dpi), statusH);
-        g.DrawString(m_statusMsg.c_str(), -1, &fontStatus, rcStatus, &sfLeftVCenter, &brStatusTxt);
-
-        // 5. Cards Area (Clipped with scroll translation)
-        float cardAreaY = statusY + statusH;
-        float cardAreaH = (float)height - cardAreaY - pagH;
-
-        if (cardAreaH > 0) {
-            g.SetClip(Gdiplus::RectF(0.0f, cardAreaY, (float)width, cardAreaH));
-
-            size_t start = m_currentPage * m_pageSize;
-            size_t count = m_cardLayouts.size();
-
-            if (count == 0) {
-                Gdiplus::Font fontEmpty(L"Microsoft YaHei UI", (float)Scale(14, m_dpi), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
-                Gdiplus::SolidBrush brEmpty(m_theme.textMuted);
-                Gdiplus::RectF rcEmpty(0.0f, cardAreaY + (float)Scale(60, m_dpi), (float)width, (float)Scale(80, m_dpi));
-                g.DrawString(L"没有找到相关题目\n\n试试其他关键词或修改筛选条件吧", -1, &fontEmpty, rcEmpty, &sfCenter, &brEmpty);
-            } else {
-                for (size_t i = 0; i < count; ++i) {
-                    size_t itemIdx = start + i;
-                    if (itemIdx >= m_searchResult.items.size()) break;
-
-                    CardLayout cardLayout = m_cardLayouts[i];
-                    cardLayout.rcCard.Y += cardAreaY - m_scrollY;
-                    cardLayout.rcCopyQuestion.Y += cardAreaY - m_scrollY;
-                    cardLayout.rcCopyAll.Y += cardAreaY - m_scrollY;
-
-                    if (cardLayout.rcCard.Y + cardLayout.rcCard.Height < cardAreaY) continue;
-                    if (cardLayout.rcCard.Y > cardAreaY + cardAreaH) break;
-
-                    CardRenderer::RenderCard(
-                        g,
-                        *m_searchResult.items[itemIdx],
-                        itemIdx + 1,
-                        cardLayout,
-                        m_searchResult.keywords,
-                        m_theme,
-                        m_dpi
-                    );
-                }
-            }
-
-            g.ResetClip();
-        }
-
-        // 6. Pagination Bar (Bottom)
-        float pagAreaY = (float)height - pagH;
-        Gdiplus::SolidBrush brPag(m_theme.bgHeader);
-        g.FillRectangle(&brPag, 0.0f, pagAreaY, (float)width, pagH);
-        g.DrawLine(&penBorder, 0.0f, pagAreaY, (float)width, pagAreaY);
-
-        Gdiplus::Font fontHint(L"Microsoft YaHei UI", (float)Scale(10, m_dpi), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
-        Gdiplus::SolidBrush brHint(m_theme.textMuted);
-        Gdiplus::RectF rcHint((float)Scale(24, m_dpi), pagAreaY, (float)Scale(420, m_dpi), pagH);
-        g.DrawString(L"快捷键：[Ctrl+F] 搜索  [PgUp/PgDn] 翻页  [Ctrl+T] 主题  [Esc] 清除", -1, &fontHint, rcHint, &sfLeftVCenter, &brHint);
-
-        auto DrawPagBtn = [&](const Gdiplus::RectF& rc, const wchar_t* text, bool disabled, bool hovered) {
-            Gdiplus::SolidBrush bg(disabled ? m_theme.bgControls : (hovered ? m_theme.btnActionHoverBg : m_theme.btnActionBg));
-            Gdiplus::Pen pen(disabled ? m_theme.borderCard : (hovered ? m_theme.borderCardHover : m_theme.btnActionBorder), 1.0f);
-            Gdiplus::SolidBrush txt(disabled ? m_theme.textMuted : m_theme.textPrimary);
-            Gdiplus::Font fontPag(L"Microsoft YaHei UI", (float)Scale(11, m_dpi), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
-            CardRenderer::DrawRoundedRect(g, &bg, &pen, rc, (float)Scale(6, m_dpi));
-            g.DrawString(text, -1, &fontPag, rc, &sfCenter, &txt);
-        };
-
-        DrawPagBtn(m_rcPageFirst, L"首页", m_currentPage == 0, m_hoverPageFirst);
-        DrawPagBtn(m_rcPagePrev, L"◀ 上一页", m_currentPage == 0, m_hoverPagePrev);
-
-        wchar_t pageStr[64];
-        swprintf(pageStr, 64, L"第 %d / %d 页", m_currentPage + 1, m_totalPages);
-        Gdiplus::RectF rcPageInfo(m_rcPagePrev.X + m_rcPagePrev.Width, pagAreaY, m_rcPageNext.X - (m_rcPagePrev.X + m_rcPagePrev.Width), pagH);
-        Gdiplus::Font fontPageInfo(L"Microsoft YaHei UI", (float)Scale(11, m_dpi), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
-        Gdiplus::SolidBrush brPageInfo(m_theme.textPrimary);
-        g.DrawString(pageStr, -1, &fontPageInfo, rcPageInfo, &sfCenter, &brPageInfo);
-
-        DrawPagBtn(m_rcPageNext, L"下一页 ▶", m_currentPage >= m_totalPages - 1, m_hoverPageNext);
-        DrawPagBtn(m_rcPageLast, L"尾页", m_currentPage >= m_totalPages - 1, m_hoverPageLast);
-    }
-
-    BitBlt(hdc, 0, 0, width, height, memDC, 0, 0, SRCCOPY);
-    SelectObject(memDC, oldBmp);
-    DeleteObject(memBmp);
-    DeleteDC(memDC);
-}
-
-void MainWindow::OnLButtonDown(int x, int y) {
-    Gdiplus::PointF pt((float)x, (float)y);
-
-    if (m_rcThemeBtn.Contains(pt)) {
-        UpdateTheme(!m_theme.isDark);
-        return;
-    }
-
-    if (m_rcFilterAll.Contains(pt)) {
-        m_typeFilter = L"全部";
-        RunSearch(true);
-        return;
-    }
-    if (m_rcFilterJudge.Contains(pt)) {
-        m_typeFilter = L"判断题";
-        RunSearch(true);
-        return;
-    }
-    if (m_rcFilterChoice.Contains(pt)) {
-        m_typeFilter = L"选择题";
-        RunSearch(true);
-        return;
-    }
-
-    if (m_rcOptionToggle.Contains(pt)) {
-        m_searchInOptions = !m_searchInOptions;
-        RunSearch(true);
-        return;
-    }
-
-    if (m_rcPageSize20.Contains(pt) && m_pageSize != 20) {
-        m_pageSize = 20;
-        RunSearch(true);
-        return;
-    }
-    if (m_rcPageSize50.Contains(pt) && m_pageSize != 50) {
-        m_pageSize = 50;
-        RunSearch(true);
-        return;
-    }
-    if (m_rcPageSize100.Contains(pt) && m_pageSize != 100) {
-        m_pageSize = 100;
-        RunSearch(true);
-        return;
-    }
-
-    // Clear Button & Search Button
-    float headerH = (float)Scale(BASE_HEADER_H, m_dpi);
-    float btnSearchW = (float)Scale(70, m_dpi);
-    float btnClearW = (float)Scale(42, m_dpi);
-    float btnY = headerH + (float)Scale(12, m_dpi);
-    float btnH = (float)Scale(38, m_dpi);
-    RECT rcCl;
-    GetClientRect(m_hwnd, &rcCl);
-    float btnSearchX = (float)(rcCl.right - rcCl.left) - (float)Scale(24, m_dpi) - btnSearchW;
-    float btnClearX = btnSearchX - btnClearW - (float)Scale(8, m_dpi);
-
-    if (Gdiplus::RectF(btnClearX, btnY, btnClearW, btnH).Contains(pt)) {
-        SetWindowTextW(m_hwndEdit, L"");
-        SetFocus(m_hwndEdit);
-        RunSearch(true);
-        return;
-    }
-
-    if (Gdiplus::RectF(btnSearchX, btnY, btnSearchW, btnH).Contains(pt)) {
-        RunSearch(true);
-        return;
-    }
-
-    if (m_rcPageFirst.Contains(pt) && m_currentPage > 0) {
-        SetPage(0);
-        return;
-    }
-    if (m_rcPagePrev.Contains(pt) && m_currentPage > 0) {
-        SetPage(m_currentPage - 1);
-        return;
-    }
-    if (m_rcPageNext.Contains(pt) && m_currentPage < m_totalPages - 1) {
-        SetPage(m_currentPage + 1);
-        return;
-    }
-    if (m_rcPageLast.Contains(pt) && m_currentPage < m_totalPages - 1) {
-        SetPage(m_totalPages - 1);
-        return;
-    }
-
-    // Card Copy Buttons Hit Test
-    float cardAreaY = (float)Scale(BASE_HEADER_H + BASE_CONTROLS_H + BASE_STATUS_H, m_dpi);
-    float pagH = (float)Scale(BASE_PAGINATION_H, m_dpi);
-    float cardAreaH = (float)(rcCl.bottom - rcCl.top) - cardAreaY - pagH;
-
-    if (pt.Y >= cardAreaY && pt.Y <= cardAreaY + cardAreaH) {
-        size_t start = m_currentPage * m_pageSize;
-        for (size_t i = 0; i < m_cardLayouts.size(); ++i) {
-            size_t itemIdx = start + i;
-            if (itemIdx >= m_searchResult.items.size()) break;
-
-            CardLayout& layout = m_cardLayouts[i];
-            Gdiplus::RectF rcQ = layout.rcCopyQuestion;
-            rcQ.Y += cardAreaY - m_scrollY;
-            Gdiplus::RectF rcAll = layout.rcCopyAll;
-            rcAll.Y += cardAreaY - m_scrollY;
-
-            const Question* q = m_searchResult.items[itemIdx];
-
-            if (rcQ.Contains(pt)) {
-                CopyToClipboard(m_hwnd, q->issue);
-                layout.copiedState = 1;
-                layout.copiedTime = std::chrono::steady_clock::now();
-                m_statusMsg = L"✓ 已复制题目到剪贴板";
-                SetTimer(m_hwnd, ID_TIMER_FEEDBACK, 2000, NULL);
-                InvalidateRect(m_hwnd, NULL, FALSE);
-                return;
-            }
-
-            if (rcAll.Contains(pt)) {
-                std::wstring allText = L"【" + q->type + L"】" + q->issue + L"\r\n";
-                for (const auto& opt : q->options) {
-                    allText += opt + L"\r\n";
-                }
-                allText += L"正确答案：" + q->answer;
-                CopyToClipboard(m_hwnd, allText);
-                layout.copiedState = 2;
-                layout.copiedTime = std::chrono::steady_clock::now();
-                m_statusMsg = L"✓ 已复制全题与答案到剪贴板";
-                SetTimer(m_hwnd, ID_TIMER_FEEDBACK, 2000, NULL);
-                InvalidateRect(m_hwnd, NULL, FALSE);
-                return;
-            }
-        }
-    }
-}
-
-void MainWindow::OnMouseMove(int x, int y) {
-    Gdiplus::PointF pt((float)x, (float)y);
-    bool needRepaint = false;
-
-    auto CheckHover = [&](bool& hoverVar, const Gdiplus::RectF& rc) {
-        bool now = rc.Contains(pt);
-        if (hoverVar != now) {
-            hoverVar = now;
-            needRepaint = true;
-        }
-    };
-
-    CheckHover(m_hoverThemeBtn, m_rcThemeBtn);
-    CheckHover(m_hoverFilterAll, m_rcFilterAll);
-    CheckHover(m_hoverFilterJudge, m_rcFilterJudge);
-    CheckHover(m_hoverFilterChoice, m_rcFilterChoice);
-    CheckHover(m_hoverPageFirst, m_rcPageFirst);
-    CheckHover(m_hoverPagePrev, m_rcPagePrev);
-    CheckHover(m_hoverPageNext, m_rcPageNext);
-    CheckHover(m_hoverPageLast, m_rcPageLast);
-
-    float cardAreaY = (float)Scale(BASE_HEADER_H + BASE_CONTROLS_H + BASE_STATUS_H, m_dpi);
-    for (size_t i = 0; i < m_cardLayouts.size(); ++i) {
-        CardLayout& layout = m_cardLayouts[i];
-        Gdiplus::RectF rcCard = layout.rcCard;
-        rcCard.Y += cardAreaY - m_scrollY;
-        Gdiplus::RectF rcQ = layout.rcCopyQuestion;
-        rcQ.Y += cardAreaY - m_scrollY;
-        Gdiplus::RectF rcAll = layout.rcCopyAll;
-        rcAll.Y += cardAreaY - m_scrollY;
-
-        bool cardHov = rcCard.Contains(pt);
-        bool qHov = rcQ.Contains(pt);
-        bool allHov = rcAll.Contains(pt);
-
-        if (layout.isHovered != cardHov || layout.isCopyQHovered != qHov || layout.isCopyAllHovered != allHov) {
-            layout.isHovered = cardHov;
-            layout.isCopyQHovered = qHov;
-            layout.isCopyAllHovered = allHov;
-            needRepaint = true;
-        }
-    }
-
-    if (needRepaint) {
-        InvalidateRect(m_hwnd, NULL, FALSE);
-    }
-}
-
-void MainWindow::OnMouseWheel(short delta) {
-    int scrollAmount = Scale(60, m_dpi);
-    if (delta > 0) {
-        ScrollTo((int)m_scrollY - scrollAmount);
-    } else {
-        ScrollTo((int)m_scrollY + scrollAmount);
-    }
-}
-
-LRESULT CALLBACK MainWindow::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
-    MainWindow* pThis = nullptr;
-    if (msg == WM_NCCREATE) {
-        CREATESTRUCT* cs = (CREATESTRUCT*)lParam;
-        pThis = (MainWindow*)cs->lpCreateParams;
-        SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)pThis);
-        pThis->m_hwnd = hwnd;
-    } else {
-        pThis = (MainWindow*)GetWindowLongPtr(hwnd, GWLP_USERDATA);
-    }
-
-    if (pThis) {
-        return pThis->HandleMessage(hwnd, msg, wParam, lParam);
-    }
-    return DefWindowProcW(hwnd, msg, wParam, lParam);
-}
-
-LRESULT MainWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
-    switch (msg) {
-    case WM_CREATE: {
-        UpdateDpi(m_dpi);
-        return 0;
-    }
-    case WM_DPICHANGED: {
-        UINT newDpi = HIWORD(wParam);
-        RECT* prc = (RECT*)lParam;
-        SetWindowPos(hwnd, NULL, prc->left, prc->top, prc->right - prc->left, prc->bottom - prc->top, SWP_NOZORDER | SWP_NOACTIVATE);
-        UpdateDpi(newDpi);
-        return 0;
-    }
-    case WM_SIZE: {
-        LayoutControls();
-        UpdatePageCards();
-        InvalidateRect(hwnd, NULL, FALSE);
-        return 0;
-    }
-    case WM_ERASEBKGND:
-        return 1;
-    case WM_PRINT:
-    case WM_PRINTCLIENT:
-    case WM_PAINT: {
-        PAINTSTRUCT ps;
-        HDC hdc = (msg == WM_PAINT) ? BeginPaint(hwnd, &ps) : (HDC)wParam;
-        OnPaint(hdc);
-        if (msg == WM_PAINT) EndPaint(hwnd, &ps);
-        return 0;
-    }
-    case WM_LBUTTONDOWN: {
-        OnLButtonDown(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
-        return 0;
-    }
-    case WM_MOUSEMOVE: {
-        OnMouseMove(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
-        return 0;
-    }
-    case WM_MOUSEWHEEL: {
-        OnMouseWheel(GET_WHEEL_DELTA_WPARAM(wParam));
-        return 0;
-    }
-    case WM_COMMAND: {
-        int id = LOWORD(wParam);
-        int code = HIWORD(wParam);
-        if (id == ID_SEARCH_EDIT) {
-            if (code == EN_CHANGE) {
-                SetTimer(hwnd, ID_TIMER_DEBOUNCE, 50, NULL);
-            }
-        }
-        return 0;
-    }
-    case WM_TIMER: {
-        if (wParam == ID_TIMER_DEBOUNCE) {
-            KillTimer(hwnd, ID_TIMER_DEBOUNCE);
-            RunSearch(true);
-        } else if (wParam == ID_TIMER_FEEDBACK) {
-            KillTimer(hwnd, ID_TIMER_FEEDBACK);
-            for (auto& l : m_cardLayouts) {
-                l.copiedState = 0;
-            }
-            InvalidateRect(hwnd, NULL, FALSE);
-        }
-        return 0;
-    }
-    case WM_CTLCOLOREDIT:
-    case WM_CTLCOLORSTATIC: {
-        HDC hdcStatic = (HDC)wParam;
-        HWND hwndStatic = (HWND)lParam;
-        if (hwndStatic == m_hwndEdit) {
-            SetTextColor(hdcStatic, m_theme.crSearchText);
-            SetBkColor(hdcStatic, m_theme.crSearchBg);
-            return (LRESULT)m_hBrEdit;
-        }
-        break;
-    }
-    case WM_KEYDOWN: {
-        bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
-        if (ctrl && wParam == 'F') {
-            if (m_hwndEdit) {
-                SetFocus(m_hwndEdit);
-                SendMessage(m_hwndEdit, EM_SETSEL, 0, -1);
-            }
-            return 0;
-        } else if (ctrl && wParam == 'T') {
-            UpdateTheme(!m_theme.isDark);
-            return 0;
-        } else if (wParam == VK_ESCAPE) {
-            if (m_hwndEdit) {
-                SetWindowTextW(m_hwndEdit, L"");
-            }
-            RunSearch(true);
-            return 0;
-        } else if (wParam == VK_PRIOR) {
-            SetPage(m_currentPage - 1);
-            return 0;
-        } else if (wParam == VK_NEXT) {
-            SetPage(m_currentPage + 1);
-            return 0;
-        }
-        break;
-    }
-    case WM_DESTROY: {
-        if (m_hFontEdit) DeleteObject(m_hFontEdit);
-        if (m_hBrControls) DeleteObject(m_hBrControls);
-        if (m_hBrEdit) DeleteObject(m_hBrEdit);
-        PostQuitMessage(0);
-        return 0;
-    }
-    }
-    return DefWindowProcW(hwnd, msg, wParam, lParam);
-}
-
-int MainWindow::Run() {
+int App::Run() {
     MSG msg;
-    while (GetMessageW(&msg, NULL, 0, 0)) {
-        if (msg.message == WM_KEYDOWN) {
-            bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
-            if (ctrl && msg.wParam == 'F') {
-                if (m_hwndEdit) {
-                    SetFocus(m_hwndEdit);
-                    SendMessage(m_hwndEdit, EM_SETSEL, 0, -1);
-                }
-                continue;
-            } else if (ctrl && msg.wParam == 'T') {
-                UpdateTheme(!m_theme.isDark);
-                continue;
-            } else if (msg.wParam == VK_ESCAPE) {
-                if (m_hwndEdit) {
-                    SetWindowTextW(m_hwndEdit, L"");
-                }
-                RunSearch(true);
-                continue;
-            } else if (msg.hwnd != m_hwndEdit) {
-                if (msg.wParam == VK_PRIOR) {
-                    SetPage(m_currentPage - 1);
-                    continue;
-                } else if (msg.wParam == VK_NEXT) {
-                    SetPage(m_currentPage + 1);
-                    continue;
-                }
-            }
-        }
-
+    while (GetMessageW(&msg, nullptr, 0, 0)) {
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }
     return (int)msg.wParam;
 }
 
-int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
-    ULONG_PTR gdiplusToken = 0;
-    Gdiplus::GdiplusStartupInput gdiplusStartupInput;
-    Gdiplus::GdiplusStartup(&gdiplusToken, &gdiplusStartupInput, NULL);
+// ------------------------------------------------------------------ theme / dpi
+void App::ApplyDpi(UINT dpi) {
+    m_dpi = dpi;
+    RebuildEditFont();
+    Layout();
+}
 
-    INITCOMMONCONTROLSEX icex;
-    icex.dwSize = sizeof(INITCOMMONCONTROLSEX);
-    icex.dwICC = ICC_STANDARD_CLASSES | ICC_WIN95_CLASSES;
-    InitCommonControlsEx(&icex);
+void App::SetTheme(bool dark) {
+    m_theme = dark ? MakeDarkTheme() : MakeLightTheme();
+    ApplyWindowChrome();
+    UpdateEditColors();
+    if (m_edit) InvalidateRect(m_edit, nullptr, TRUE);
+    InvalidateRect(m_hwnd, nullptr, FALSE);
+}
+
+void App::ApplyWindowChrome() {
+    if (!m_hwnd) return;
+    BOOL dark = m_theme.dark ? TRUE : FALSE;
+    DwmSetWindowAttribute(m_hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
+    COLORREF caption = m_theme.captionColor;
+    COLORREF text = m_theme.captionText;
+    DwmSetWindowAttribute(m_hwnd, DWMWA_CAPTION_COLOR, &caption, sizeof(caption));
+    DwmSetWindowAttribute(m_hwnd, DWMWA_TEXT_COLOR, &text, sizeof(text));
+    COLORREF borderColor = ToColorRef(m_theme.windowBorder);
+    DwmSetWindowAttribute(m_hwnd, 34 /* DWMWA_BORDER_COLOR */, &borderColor, sizeof(borderColor));
+    SetWindowPos(m_hwnd, nullptr, 0, 0, 0, 0,
+                 SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+void App::UpdateEditColors() {
+    if (m_editBrush) DeleteObject(m_editBrush);
+    m_editBrush = CreateSolidBrush(m_theme.editBg);
+    if (m_edit) InvalidateRect(m_edit, nullptr, TRUE);
+}
+
+void App::RebuildEditFont() {
+    if (m_editFont) DeleteObject(m_editFont);
+    m_editFont = m_fonts.CreateGdiFont(TextRole::Field, m_dpi);
+    if (m_edit && m_editFont) {
+        SendMessageW(m_edit, WM_SETFONT, (WPARAM)m_editFont, TRUE);
+    }
+}
+
+// ------------------------------------------------------------------ layout
+void App::Layout() {
+    if (!m_hwnd) return;
+    RECT rc = {};
+    GetClientRect(m_hwnd, &rc);
+    m_dipW = PixelsToDip(rc.right - rc.left, m_dpi);
+    m_dipH = PixelsToDip(rc.bottom - rc.top, m_dpi);
+
+    m_themeBtnRect = RectF(m_dipW - kFabMargin - kThemeBtnSize, 16.0f, kThemeBtnSize, kThemeBtnSize);
+    float fieldRight = m_themeBtnRect.x - 12.0f;
+    m_fieldRect = RectF(kPadX, kFieldY, (std::max)(160.0f, fieldRight - kPadX), kFieldH);
+
+    // Result panel first: toolbar rows align to its edges.
+    float panelW = (std::min)(kPanelMaxWidth, m_dipW - kPadX * 2.0f);
+    float panelX = (m_dipW - panelW) * 0.5f;
+    float panelH = (std::max)(120.0f, m_dipH - kPanelTop - kPanelBottomGap);
+    m_panelRect = RectF(panelX, kPanelTop, panelW, panelH);
+
+    // filter chips, aligned to the panel column
+    std::wstring labels[3] = {
+        L"全部", L"判断题", L"选择题"
+    };
+    std::wstring numbers[3] = {
+        FormatInt(m_db.GetTotalCount()), FormatInt(m_db.GetJudgeCount()), FormatInt(m_db.GetChoiceCount())
+    };
+    float px = m_panelRect.x;
+    const float filterY = kFilterTop + kFilterInnerTop;
+    for (int i = 0; i < 3; ++i) {
+        float labelW = m_fonts.MeasureWidth(labels[i], TextRole::FilterStrong);
+        float numW = m_fonts.MeasureWidth(numbers[i], TextRole::Meta);
+        float w = labelW + 6.0f + numW + kFilterPadX * 2.0f;
+        m_pillRects[i] = RectF(px, filterY, w, kFilterH);
+        px += w + kFilterGap;
+    }
+
+    m_switchRect = RectF(m_panelRect.Right() - kSwitchW, filterY + (kFilterH - kSwitchH) * 0.5f,
+                         kSwitchW, kSwitchH);
+
+    m_fabRect = RectF(m_dipW - kFabMargin - kFabSize, m_dipH - kFabMargin - kFabSize, kFabSize, kFabSize);
+
+    m_list.SetPanel(m_panelRect);
+    m_list.SetContentWidth(m_panelRect.w - kPanelPadX * 2.0f);
+
+    if (m_edit) {
+        int textLen = GetWindowTextLengthW(m_edit);
+        float editX = m_fieldRect.x + kFieldTextLeft;
+        float editRight = m_fieldRect.Right() - (textLen > 0 ? 44.0f : 14.0f);
+        float editH = 24.0f;
+        float editY = m_fieldRect.y + (m_fieldRect.h - editH) * 0.5f;
+        SetWindowPos(m_edit, nullptr, DipToPixels(editX, m_dpi), DipToPixels(editY, m_dpi),
+                     (std::max)(20, DipToPixels(editRight - editX, m_dpi)), DipToPixels(editH, m_dpi),
+                     SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+}
+
+// ------------------------------------------------------------------ search
+void App::UpdateSearchResults() {
+    wchar_t buf[512] = {};
+    if (m_edit) GetWindowTextW(m_edit, buf, 512);
+
+    SearchFilter filter;
+    filter.query = buf;
+    filter.typeFilter = m_typeFilter;
+    filter.searchInOptions = m_searchInOptions;
+    m_search = SearchEngine::Execute(m_db.GetQuestions(), filter);
+
+    m_list.SetResults(m_search.items, m_search.keywords);
+    m_list.SetPanel(m_panelRect);
+    m_list.SetContentWidth(m_panelRect.w - kPanelPadX * 2.0f);
+    m_list.ScrollTo(0.0f, false);
+    m_list.EnsureLoaded();
+    Layout();
+    KillTimer(m_hwnd, kTimerPreload);
+    if (!m_list.AllLoaded()) SetTimer(m_hwnd, kTimerPreload, 16, nullptr);
+    InvalidateRect(m_hwnd, nullptr, FALSE);
+}
+
+void App::FocusSearch() {
+    if (!m_edit) return;
+    SetFocus(m_edit);
+    SendMessageW(m_edit, EM_SETSEL, -1, -1);
+}
+
+// ------------------------------------------------------------------ animation
+void App::StartAnimating() {
+    if (!m_hwnd) return;
+    m_lastTick = std::chrono::steady_clock::now();
+    SetTimer(m_hwnd, kTimerAnim, kAnimIntervalMs, nullptr);
+}
+
+void App::StopAnimatingIfIdle() {
+    if (m_list.Animating() || m_list.CopyFeedbackActive()) return;
+    KillTimer(m_hwnd, kTimerAnim);
+}
+
+bool App::AnimTick() {
+    auto now = std::chrono::steady_clock::now();
+    float dt = (float)std::chrono::duration<double, std::milli>(now - m_lastTick).count();
+    m_lastTick = now;
+    if (dt <= 0.0f || dt > 100.0f) dt = (float)kAnimIntervalMs;
+
+    bool changed = m_list.Tick(dt);
+    m_list.TickCopyFeedback(dt);
+    if (m_list.CopyFeedbackActive()) changed = true;
+
+    if (changed) InvalidateRect(m_hwnd, nullptr, FALSE);
+    StopAnimatingIfIdle();
+    return changed;
+}
+
+// ------------------------------------------------------------------ text helpers
+float App::DrawTextBlock(Gfx& gfx, const std::wstring& text, TextRole role, float x, float y, Color color) {
+    IDWriteTextLayout* layout = m_fonts.MakeLayout(text, role, 4096.0f, false);
+    if (!layout) return 0.0f;
+    DWRITE_TEXT_METRICS m = {};
+    layout->GetMetrics(&m);
+    gfx.DrawTextLayout(layout, x, y, color);
+    layout->Release();
+    return m.height;
+}
+
+void App::DrawTextCentered(Gfx& gfx, const std::wstring& text, TextRole role, const RectF& box, Color color) {
+    IDWriteTextLayout* layout = m_fonts.MakeLayout(text, role, (std::max)(1.0f, box.w), false);
+    if (!layout) return;
+    layout->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+    DWRITE_TEXT_METRICS m = {};
+    layout->GetMetrics(&m);
+    gfx.DrawTextLayout(layout, box.x, box.y + (box.h - m.height) * 0.5f, color);
+    layout->Release();
+}
+
+void App::DrawTextLeftVCenter(Gfx& gfx, const std::wstring& text, TextRole role, float x, float y, float h,
+                              Color color) {
+    IDWriteTextLayout* layout = m_fonts.MakeLayout(text, role, 4096.0f, false);
+    if (!layout) return;
+    DWRITE_TEXT_METRICS m = {};
+    layout->GetMetrics(&m);
+    gfx.DrawTextLayout(layout, x, y + (h - m.height) * 0.5f, color);
+    layout->Release();
+}
+
+// ------------------------------------------------------------------ paint
+void App::Paint() {
+    RECT rc = {};
+    GetClientRect(m_hwnd, &rc);
+    UINT widthPx = (UINT)(rc.right - rc.left);
+    UINT heightPx = (UINT)(rc.bottom - rc.top);
+    if (widthPx == 0 || heightPx == 0) return;
+
+    if (FAILED(m_gfx.EnsureTarget(m_hwnd, widthPx, heightPx, (float)m_dpi))) return;
+    if (FAILED(m_gfx.BeginDraw())) return;
+
+    m_gfx.Clear(m_theme.window);
+    PaintSearchField();
+    PaintToolbar();
+    PaintStatusRow();
+    m_list.Paint(m_gfx, m_theme);
+    if (m_list.Empty()) PaintEmptyState();
+    PaintBackToTop();
+
+    HRESULT hr = m_gfx.EndDraw();
+    if (hr == D2DERR_RECREATE_TARGET) InvalidateRect(m_hwnd, nullptr, FALSE);
+}
+
+void App::PaintSearchField() {
+    bool focused = (GetFocus() == m_edit);
+    m_gfx.FillRound(m_fieldRect, kFieldRadius, m_theme.surfaceSunken);
+    Color borderColor = focused ? m_theme.accent : (m_hoverField ? m_theme.borderStrong : m_theme.border);
+    m_gfx.StrokeRound(m_fieldRect.Inset(0.5f, 0.5f), kFieldRadius, borderColor, 1.0f);
+
+    RectF iconBox(m_fieldRect.x + 14.0f, m_fieldRect.y + (m_fieldRect.h - 16.0f) * 0.5f, 16.0f, 16.0f);
+    m_gfx.DrawIcon(Icon::Search, iconBox, m_theme.textMuted, 1.6f);
+
+    if (m_edit && GetWindowTextLengthW(m_edit) > 0) {
+        RectF clearRect = ClearButtonRect();
+        if (m_hoverClear) {
+            m_gfx.FillRound(clearRect, 12.0f, m_theme.controlHover);
+        }
+        RectF clearIcon(clearRect.x + 5.0f, clearRect.y + 5.0f, 14.0f, 14.0f);
+        m_gfx.DrawIcon(Icon::Close, clearIcon, m_hoverClear ? m_theme.textSecondary : m_theme.textMuted,
+                       1.6f);
+    }
+
+    m_gfx.FillRound(m_themeBtnRect, 16.0f,
+                    m_hoverThemeBtn ? m_theme.controlHover : WithAlpha(m_theme.controlHover, 0.0f));
+    RectF themeIcon(m_themeBtnRect.x + 7.0f, m_themeBtnRect.y + 7.0f, 18.0f, 18.0f);
+    m_gfx.DrawIcon(m_theme.dark ? Icon::Sun : Icon::Moon, themeIcon,
+                   m_hoverThemeBtn ? m_theme.textPrimary : m_theme.textSecondary, 1.6f);
+}
+
+void App::PaintToolbar() {
+    std::wstring labels[3] = { L"全部", L"判断题", L"选择题" };
+    std::wstring numbers[3] = { FormatInt(m_db.GetTotalCount()), FormatInt(m_db.GetJudgeCount()),
+                                FormatInt(m_db.GetChoiceCount()) };
+    const std::wstring values[3] = { L"全部", L"判断题", L"选择题" };
+
+    for (int i = 0; i < 3; ++i) {
+        bool selected = (m_typeFilter == values[i]);
+        bool hovered = (m_hoverPill == i);
+        Color bg = selected ? m_theme.chipSelectedBg
+                            : (hovered ? m_theme.controlHover : WithAlpha(m_theme.controlHover, 0.0f));
+        m_gfx.FillRound(m_pillRects[i], 8.0f, bg);
+        if (selected) {
+            m_gfx.StrokeRound(m_pillRects[i].Inset(0.5f, 0.5f), 8.0f, m_theme.borderStrong, 1.0f);
+        }
+        float labelW = MeasureText(labels[i], TextRole::FilterStrong);
+        float x = m_pillRects[i].x + kFilterPadX;
+        DrawTextLeftVCenter(m_gfx, labels[i], selected ? TextRole::FilterStrong : TextRole::Filter,
+                            x, m_pillRects[i].y, kFilterH,
+                            selected ? m_theme.textPrimary : m_theme.textSecondary);
+        DrawTextLeftVCenter(m_gfx, numbers[i],
+                            selected ? TextRole::MetaMedium : TextRole::Meta,
+                            x + labelW + 6.0f, m_pillRects[i].y, kFilterH,
+                            selected ? m_theme.textPrimary : m_theme.textMuted);
+    }
+
+    const std::wstring label = L"检索选项";
+    float labelW = MeasureText(label, TextRole::Filter);
+    float labelX = m_switchRect.x - 8.0f - labelW;
+    DrawTextLeftVCenter(m_gfx, label, TextRole::Filter, labelX,
+                        m_switchRect.y - (kFilterH - kSwitchH) * 0.5f, kFilterH, m_theme.textSecondary);
+
+    RectF track = m_switchRect;
+    m_gfx.FillRound(track, kSwitchH * 0.5f,
+                    m_searchInOptions ? m_theme.switchTrackOn : m_theme.switchTrackOff);
+    float knobR = 6.5f;
+    float knobCx = m_searchInOptions ? track.Right() - 2.0f - knobR : track.x + 2.0f + knobR;
+    m_gfx.FillCircle(knobCx, track.CenterY(), knobR, m_theme.switchThumb);
+
+    m_gfx.FillRect(RectF(0.0f, kHairlineY, m_dipW, 1.0f), m_theme.hairline);
+}
+
+void App::PaintStatusRow() {
+    std::wstring count = FormatInt((long long)m_list.Count());
+    DrawTextLeftVCenter(m_gfx, count, TextRole::StatusStrong, m_panelRect.x, kStatusTop, kStatusH,
+                        m_theme.textPrimary);
+    float countW = MeasureText(count, TextRole::StatusStrong);
+    DrawTextLeftVCenter(m_gfx, L" 条结果", TextRole::Status, m_panelRect.x + countW, kStatusTop, kStatusH,
+                        m_theme.textMuted);
+
+    std::wstring latency = FormatMs(m_search.elapsedMs);
+    float latencyW = MeasureText(latency, TextRole::Status);
+    DrawTextLeftVCenter(m_gfx, latency, TextRole::Status, m_panelRect.Right() - latencyW, kStatusTop,
+                        kStatusH, m_theme.textMuted);
+}
+
+void App::PaintEmptyState() {
+    float cx = m_panelRect.CenterX();
+    float cy = m_panelRect.CenterY();
+    RectF iconBox(cx - 10.0f, cy - 44.0f, 20.0f, 20.0f);
+    m_gfx.DrawIcon(Icon::Search, iconBox, m_theme.textMuted, 1.6f);
+    DrawTextCentered(m_gfx, L"没有找到相关题目", TextRole::EmptyTitle,
+                     RectF(m_panelRect.x, cy - 10.0f, m_panelRect.w, 20.0f), m_theme.textSecondary);
+    DrawTextCentered(m_gfx, L"试试更短的关键词，或切换筛选条件", TextRole::EmptyHint,
+                     RectF(m_panelRect.x, cy + 16.0f, m_panelRect.w, 18.0f), m_theme.textMuted);
+}
+
+void App::PaintBackToTop() {
+    if (m_list.ScrollY() <= 320.0f || m_list.Empty()) return;
+    m_gfx.ShadowCircle(m_fabRect.CenterX(), m_fabRect.CenterY() + 1.5f, m_fabRect.w * 0.5f,
+                       m_theme.shadowSoft);
+    m_gfx.FillCircle(m_fabRect.CenterX(), m_fabRect.CenterY(), m_fabRect.w * 0.5f, m_theme.surface);
+    m_gfx.StrokeCircle(m_fabRect.CenterX(), m_fabRect.CenterY(), m_fabRect.w * 0.5f - 0.5f,
+                       m_theme.border, 1.0f);
+    RectF icon(m_fabRect.x + 8.0f, m_fabRect.y + 8.0f, 16.0f, 16.0f);
+    m_gfx.DrawIcon(Icon::ArrowUp, icon, m_hoverBackToTop ? m_theme.textPrimary : m_theme.textSecondary,
+                   1.6f);
+}
+
+// ------------------------------------------------------------------ hit tests
+RectF App::ClearButtonRect() const {
+    return RectF(m_fieldRect.Right() - kFieldClearRight - 24.0f, m_fieldRect.y + (m_fieldRect.h - 24.0f) * 0.5f,
+                 24.0f, 24.0f);
+}
+
+int App::HitTestPill(float x, float y) const {
+    for (int i = 0; i < 3; ++i) {
+        if (m_pillRects[i].Contains(x, y)) return i;
+    }
+    return -1;
+}
+
+bool App::HitTestThemeButton(float x, float y) const { return m_themeBtnRect.Contains(x, y); }
+
+bool App::HitTestClearButton(float x, float y) const {
+    if (!m_edit || GetWindowTextLengthW(m_edit) == 0) return false;
+    return ClearButtonRect().Contains(x, y);
+}
+
+bool App::HitTestSwitch(float x, float y) const {
+    RectF area(m_switchRect.x - 130.0f, m_switchRect.y - 8.0f, 130.0f + m_switchRect.w, kSwitchH + 16.0f);
+    return area.Contains(x, y);
+}
+
+bool App::HitTestField(float x, float y) const { return m_fieldRect.Contains(x, y); }
+
+bool App::HitTestBackToTop(float x, float y) const {
+    return m_list.ScrollY() > 320.0f && !m_list.Empty() && m_fabRect.Contains(x, y);
+}
+
+// ------------------------------------------------------------------ input
+void App::OnMouseMove(int px, int py) {
+    float x = DipX(px);
+    float y = DipY(py);
+    if (m_list.DraggingScrollbar()) {
+        m_list.ScrollbarDragTo(x, y);
+        StartAnimating();
+        InvalidateRect(m_hwnd, nullptr, FALSE);
+        return;
+    }
+    bool needPaint = false;
+
+    int pill = HitTestPill(x, y);
+    bool themeBtn = HitTestThemeButton(x, y);
+    bool clearBtn = HitTestClearButton(x, y);
+    bool sw = HitTestSwitch(x, y);
+    bool field = HitTestField(x, y);
+    bool top = HitTestBackToTop(x, y);
+    bool scrollbarHover = m_list.HitTestScrollbar(x, y);
+
+    if (pill != m_hoverPill || themeBtn != m_hoverThemeBtn || clearBtn != m_hoverClear ||
+        sw != m_hoverSwitch || field != m_hoverField || top != m_hoverBackToTop ||
+        scrollbarHover != m_list.ScrollbarHover()) {
+        m_hoverPill = pill;
+        m_hoverThemeBtn = themeBtn;
+        m_hoverClear = clearBtn;
+        m_hoverSwitch = sw;
+        m_hoverField = field;
+        m_hoverBackToTop = top;
+        m_list.SetScrollbarHover(scrollbarHover);
+        needPaint = true;
+    }
+
+    int item = m_list.ItemIndexAt(x, y);
+    bool copyHit = item >= 0 && m_list.CopyButtonHit(item, x, y);
+    if (item != m_list.HoveredIndex() || copyHit != m_list.HoveredCopy()) {
+        m_list.SetHoverIndex(item);
+        m_list.SetHoveredCopy(copyHit);
+        needPaint = true;
+    }
+
+    if (needPaint) InvalidateRect(m_hwnd, nullptr, FALSE);
+}
+
+void App::OnLButtonDown(int px, int py) {
+    float x = DipX(px);
+    float y = DipY(py);
+
+    if (HitTestThemeButton(x, y)) {
+        SetTheme(!m_theme.dark);
+        return;
+    }
+    if (HitTestClearButton(x, y)) {
+        if (m_edit) SetWindowTextW(m_edit, L"");
+        UpdateSearchResults();
+        FocusSearch();
+        return;
+    }
+    int pill = HitTestPill(x, y);
+    if (pill >= 0) {
+        const std::wstring values[3] = { L"全部", L"判断题", L"选择题" };
+        if (m_typeFilter != values[pill]) {
+            m_typeFilter = values[pill];
+            UpdateSearchResults();
+        }
+        return;
+    }
+    if (HitTestSwitch(x, y)) {
+        m_searchInOptions = !m_searchInOptions;
+        UpdateSearchResults();
+        return;
+    }
+    if (HitTestBackToTop(x, y)) {
+        m_list.ScrollToTop();
+        StartAnimating();
+        InvalidateRect(m_hwnd, nullptr, FALSE);
+        return;
+    }
+    if (m_list.HitTestScrollbar(x, y)) {
+        m_list.BeginScrollbarDrag(x, y);
+        SetCapture(m_hwnd);
+        StartAnimating();
+        InvalidateRect(m_hwnd, nullptr, FALSE);
+        return;
+    }
+    if (HitTestField(x, y)) {
+        FocusSearch();
+        return;
+    }
+
+    int item = m_list.ItemIndexAt(x, y);
+    if (item >= 0 && m_list.CopyButtonHit(item, x, y) && (size_t)item < m_search.items.size()) {
+        CopyToClipboard(m_hwnd, m_search.items[item]->CopyText());
+        m_list.MarkCopied(item);
+        StartAnimating();
+        InvalidateRect(m_hwnd, nullptr, FALSE);
+        return;
+    }
+}
+
+void App::OnLButtonUp(int px, int py) {
+    (void)px;
+    (void)py;
+    if (m_list.DraggingScrollbar()) {
+        m_list.EndScrollbarDrag();
+        ReleaseCapture();
+    }
+}
+
+void App::OnMouseWheel(short delta) {
+    float steps = (float)delta / 120.0f;
+    m_list.ScrollBy(-steps * kWheelStep);
+    StartAnimating();
+    InvalidateRect(m_hwnd, nullptr, FALSE);
+}
+
+void App::OnKeyDown(WPARAM key, bool ctrl) {
+    if (ctrl && (key == 'F' || key == 'f')) {
+        FocusSearch();
+        return;
+    }
+    if (ctrl && (key == 'T' || key == 't')) {
+        SetTheme(!m_theme.dark);
+        return;
+    }
+    if (ctrl && key == VK_HOME) {
+        m_list.ScrollToTop();
+        StartAnimating();
+        InvalidateRect(m_hwnd, nullptr, FALSE);
+        return;
+    }
+    if (ctrl && key == VK_END) {
+        m_list.ScrollToEnd();
+        StartAnimating();
+        InvalidateRect(m_hwnd, nullptr, FALSE);
+        return;
+    }
+    switch (key) {
+    case VK_ESCAPE:
+        if (m_edit) SetWindowTextW(m_edit, L"");
+        UpdateSearchResults();
+        return;
+    case VK_PRIOR:
+        m_list.ScrollBy(-(m_panelRect.h - 80.0f));
+        StartAnimating();
+        InvalidateRect(m_hwnd, nullptr, FALSE);
+        return;
+    case VK_NEXT:
+        m_list.ScrollBy(m_panelRect.h - 80.0f);
+        StartAnimating();
+        InvalidateRect(m_hwnd, nullptr, FALSE);
+        return;
+    case VK_HOME:
+        m_list.ScrollToTop();
+        StartAnimating();
+        InvalidateRect(m_hwnd, nullptr, FALSE);
+        return;
+    case VK_END:
+        m_list.ScrollToEnd();
+        StartAnimating();
+        InvalidateRect(m_hwnd, nullptr, FALSE);
+        return;
+    default:
+        break;
+    }
+}
+
+// ------------------------------------------------------------------ edit placeholder
+void App::DrawEditPlaceholderIfNeeded() {
+    if (!m_edit) return;
+    if (GetWindowTextLengthW(m_edit) > 0) return;
+    HDC hdc = GetDC(m_edit);
+    if (!hdc) return;
+    HFONT font = (HFONT)SendMessageW(m_edit, WM_GETFONT, 0, 0);
+    HGDIOBJ oldFont = font ? SelectObject(hdc, font) : nullptr;
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, ToColorRef(m_theme.textMuted));
+    RECT rc = { 0, 0, 0, 0 };
+    GetClientRect(m_edit, &rc);
+    const wchar_t* hint = L"搜索题目、选项关键词…";
+    DrawTextW(hdc, hint, -1, &rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    if (oldFont) SelectObject(hdc, oldFont);
+    ReleaseDC(m_edit, hdc);
+}
+
+// ------------------------------------------------------------------ message loop
+LRESULT CALLBACK App::EditProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    App* app = (App*)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+    if (!app) return DefWindowProcW(hwnd, msg, wParam, lParam);
+
+    switch (msg) {
+    case WM_KEYDOWN: {
+        bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+        if ((ctrl && (wParam == 'T' || wParam == 't')) || (ctrl && (wParam == 'F' || wParam == 'f')) ||
+            (ctrl && (wParam == VK_HOME || wParam == VK_END)) || wParam == VK_PRIOR ||
+            wParam == VK_NEXT || wParam == VK_ESCAPE) {
+            app->OnKeyDown(wParam, ctrl);
+            return 0;
+        }
+        break;
+    }
+    case WM_CHAR:
+        if (wParam == VK_ESCAPE) return 0;
+        break;
+    case WM_PAINT: {
+        LRESULT result = CallWindowProcW(app->m_editProc, hwnd, msg, wParam, lParam);
+        app->DrawEditPlaceholderIfNeeded();
+        return result;
+    }
+    case WM_MOUSEWHEEL:
+        SendMessageW(app->m_hwnd, WM_MOUSEWHEEL, wParam, lParam);
+        return 0;
+    case WM_SETFOCUS:
+    case WM_KILLFOCUS:
+        InvalidateRect(app->m_hwnd, nullptr, FALSE);
+        break;
+    case WM_NCDESTROY:
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+        break;
+    default:
+        break;
+    }
+    return CallWindowProcW(app->m_editProc, hwnd, msg, wParam, lParam);
+}
+
+LRESULT CALLBACK App::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    App* app = nullptr;
+    if (msg == WM_NCCREATE) {
+        CREATESTRUCTW* cs = (CREATESTRUCTW*)lParam;
+        app = (App*)cs->lpCreateParams;
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)app);
+        app->m_hwnd = hwnd;
+    } else {
+        app = (App*)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+    }
+    if (app) return app->HandleMessage(hwnd, msg, wParam, lParam);
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+LRESULT App::HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    switch (msg) {
+    case WM_CREATE: {
+        m_edit = CreateWindowExW(0, L"EDIT", L"",
+                                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL | ES_LEFT, 0, 0, 100,
+                                 24, hwnd, (HMENU)(INT_PTR)ID_SEARCH_EDIT, GetModuleHandleW(nullptr),
+                                 nullptr);
+        if (m_edit) {
+            SetWindowLongPtrW(m_edit, GWLP_USERDATA, (LONG_PTR)this);
+            m_editProc = (WNDPROC)SetWindowLongPtrW(m_edit, GWLP_WNDPROC, (LONG_PTR)App::EditProc);
+            SendMessageW(m_edit, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, 0);
+            SendMessageW(m_edit, EM_SETLIMITTEXT, 200, 0);
+        }
+        RebuildEditFont();
+        UpdateEditColors();
+        return 0;
+    }
+    case WM_ERASEBKGND:
+        return 1;
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        BeginPaint(hwnd, &ps);
+        Paint();
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+    case WM_PRINTCLIENT:
+        Paint();
+        return 0;
+    case WM_SIZE:
+        Layout();
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return 0;
+    case WM_DPICHANGED: {
+        UINT newDpi = HIWORD(wParam);
+        RECT* target = (RECT*)lParam;
+        if (target) {
+            SetWindowPos(hwnd, nullptr, target->left, target->top, target->right - target->left,
+                         target->bottom - target->top, SWP_NOZORDER | SWP_NOACTIVATE);
+        }
+        ApplyDpi(newDpi);
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return 0;
+    }
+    case WM_GETMINMAXINFO: {
+        MINMAXINFO* info = (MINMAXINFO*)lParam;
+        if (info) {
+            info->ptMinTrackSize.x = DipToPixels(880.0f, m_dpi);
+            info->ptMinTrackSize.y = DipToPixels(600.0f, m_dpi);
+        }
+        return 0;
+    }
+    case WM_MOUSEMOVE:
+        OnMouseMove(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
+        return 0;
+    case WM_NCMOUSEMOVE:
+        break;
+    case WM_LBUTTONDOWN:
+        OnLButtonDown(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
+        return 0;
+    case WM_LBUTTONUP:
+        OnLButtonUp(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
+        return 0;
+    case WM_MOUSEWHEEL:
+        OnMouseWheel(GET_WHEEL_DELTA_WPARAM(wParam));
+        return 0;
+    case WM_SETCURSOR: {
+        if (m_list.DraggingScrollbar()) {
+            SetCursor(LoadCursorW(nullptr, IDC_HAND));
+            return TRUE;
+        }
+        if (LOWORD(lParam) == HTCLIENT) {
+            POINT pt = {};
+            GetCursorPos(&pt);
+            ScreenToClient(hwnd, &pt);
+            float x = DipX(pt.x);
+            float y = DipY(pt.y);
+            int item = m_list.ItemIndexAt(x, y);
+            bool hand = HitTestPill(x, y) >= 0 || HitTestThemeButton(x, y) || HitTestClearButton(x, y) ||
+                        HitTestSwitch(x, y) || HitTestBackToTop(x, y) || m_list.HitTestScrollbar(x, y) ||
+                        (item >= 0 && m_list.CopyButtonHit(item, x, y)) || HitTestField(x, y);
+            if (hand) {
+                SetCursor(LoadCursorW(nullptr, IDC_HAND));
+                return TRUE;
+            }
+        }
+        break;
+    }
+    case WM_COMMAND: {
+        int id = LOWORD(wParam);
+        int code = HIWORD(wParam);
+        if (id == ID_SEARCH_EDIT && code == EN_CHANGE) {
+            SetTimer(hwnd, kTimerSearch, kSearchDebounceMs, nullptr);
+        }
+        return 0;
+    }
+    case WM_TIMER:
+        if (wParam == kTimerAnim) {
+            AnimTick();
+            return 0;
+        }
+        if (wParam == kTimerSearch) {
+            KillTimer(hwnd, kTimerSearch);
+            UpdateSearchResults();
+            return 0;
+        }
+        if (wParam == kTimerPreload) {
+            bool more = m_list.PremeasureNext(4.0);
+            if (!more) KillTimer(hwnd, kTimerPreload);
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
+        break;
+    case WM_CTLCOLOREDIT:
+    case WM_CTLCOLORSTATIC: {
+        HDC hdcEdit = (HDC)wParam;
+        if (m_edit && (HWND)lParam == m_edit) {
+            SetTextColor(hdcEdit, m_theme.editText);
+            SetBkColor(hdcEdit, m_theme.editBg);
+            if (!m_editBrush) m_editBrush = CreateSolidBrush(m_theme.editBg);
+            return (LRESULT)m_editBrush;
+        }
+        break;
+    }
+    case WM_KEYDOWN:
+        OnKeyDown(wParam, (GetKeyState(VK_CONTROL) & 0x8000) != 0);
+        return 0;
+    case WM_DESTROY:
+        KillTimer(hwnd, kTimerAnim);
+        KillTimer(hwnd, kTimerSearch);
+        KillTimer(hwnd, kTimerPreload);
+        if (m_editFont) { DeleteObject(m_editFont); m_editFont = nullptr; }
+        if (m_editBrush) { DeleteObject(m_editBrush); m_editBrush = nullptr; }
+        m_gfx.Shutdown();
+        m_fonts.Shutdown();
+        PostQuitMessage(0);
+        return 0;
+    default:
+        break;
+    }
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
+    (void)hPrevInstance;
+    (void)lpCmdLine;
+    CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 
     int result = 0;
     {
-        MainWindow app;
-        if (app.Create(hInstance, nCmdShow)) {
-            result = app.Run();
-        }
+        App app;
+        if (app.Create(hInstance, nCmdShow)) result = app.Run();
     }
-
-    Gdiplus::GdiplusShutdown(gdiplusToken);
+    CoUninitialize();
     return result;
 }

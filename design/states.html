@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<title>体育理论题库查询 · 状态演示</title>
+<link rel="stylesheet" href="mock.css">
+</head>
+<body class="page">
+<svg class="sprite" aria-hidden="true" focusable="false">
+  <symbol id="i-search" viewBox="0 0 16 16"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="6.9" cy="6.9" r="4.4"/><path d="M10.3 10.3 13.8 13.8"/></g></symbol>
+  <symbol id="i-search-20" viewBox="0 0 20 20"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="8.6" cy="8.6" r="5.5"/><path d="M12.9 12.9 17 17"/></g></symbol>
+  <symbol id="i-moon" viewBox="0 0 18 18"><path d="M15.3 11.2A6.35 6.35 0 0 1 7.1 3a6.6 6.6 0 1 0 8.2 8.2Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 18 18"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="9" cy="9" r="3.1"/><path d="M9 2.2v1.7M9 14.1v1.7M2.2 9h1.7M14.1 9h1.7M4.2 4.2l1.2 1.2M12.6 12.6l1.2 1.2M13.8 4.2l-1.2 1.2M5.4 12.6l-1.2 1.2"/></g></symbol>
+  <symbol id="i-x" viewBox="0 0 14 14"><path d="M3.6 3.6 10.4 10.4M10.4 3.6 3.6 10.4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+  <symbol id="i-check" viewBox="0 0 12 12"><path d="M2.5 6.4 4.9 8.8 9.6 3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-cross" viewBox="0 0 12 12"><path d="M3.2 3.2 8.8 8.8M8.8 3.2 3.2 8.8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 15 15"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><rect x="5.3" y="5.3" width="7.9" height="7.9" rx="1.8"/><path d="M9.7 3.1H3.6A1.2 1.2 0 0 0 2.4 4.3v6.1"/></g></symbol>
+  <symbol id="i-check-15" viewBox="0 0 15 15"><path d="M2.9 7.7 6.1 10.9 12.1 4.1" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-arrow-up" viewBox="0 0 16 16"><path d="M8 12.9V3.4M3.7 7.7 8 3.4l4.3 4.3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+</svg>
+<div class="sheet">
+  <div class="sec">
+    <div class="sec-label">条目交互态 · hover（复制按钮浮现） / 已复制（1.2 s 内）</div>
+    <section class="panel panel--flow">
+      <div class="panel-scroll" style="position: static; overflow: visible;">
+        <article class="item is-hover">
+          <div class="item-meta">
+            <span class="idx">01</span>
+            <span class="qtype"><i class="dot dot--judge"></i>判断题</span>
+            <span class="hits"><span class="hit">健美操</span></span>
+            <span class="meta-right">
+              <span class="pill pill--ok"><svg class="ic-12"><use href="#i-check"/></svg>正确</span>
+              <button class="copy-btn" aria-label="复制"><svg class="ic-15"><use href="#i-copy"/></svg></button>
+            </span>
+          </div>
+          <p class="stem">健身性健美操一般的练习时间为一个小时左右，在练习的要求上根据个体情况而变化，严格遵循“健康、安全”的原则，防止运动损伤的出现，在保证安全的基础上，达到锻炼身体的目的。</p>
+        </article>
+        <article class="item is-copied">
+          <div class="item-meta">
+            <span class="idx">02</span>
+            <span class="qtype"><i class="dot dot--single"></i>单选题</span>
+            <span class="meta-right">
+              <span class="copied">已复制</span>
+              <span class="pill pill--ans">答案 C</span>
+              <button class="copy-btn is-done" aria-label="已复制"><svg class="ic-15"><use href="#i-check-15"/></svg></button>
+            </span>
+          </div>
+          <p class="stem">排舞比赛中自选串烧排舞是指在指定的排舞曲目范围内，任选三首排舞并按照规则进行排舞的成套动作，其时间长度（包括上下场时间）不得超过_____分钟。</p>
+          <div class="opts">
+            <div class="opt"><span class="opt-key">A．</span><span class="opt-text">4</span></div>
+            <div class="opt"><span class="opt-key">B．</span><span class="opt-text">5</span></div>
+            <div class="opt is-key"><span class="opt-key">C．</span><span class="opt-text">6</span></div>
+            <div class="opt"><span class="opt-key">D．</span><span class="opt-text">7</span></div>
+          </div>
+        </article>
+      </div>
+    </section>
+  </div>
+
+  <div class="sec">
+    <div class="sec-label">空状态 · 无命中结果</div>
+    <section class="panel panel--flow panel--empty">
+      <div class="empty">
+        <svg class="empty-ico"><use href="#i-search-20"/></svg>
+        <div class="empty-title">没有找到相关题目</div>
+        <div class="empty-hint">试试更短的关键词，或切换筛选条件</div>
+      </div>
+    </section>
+  </div>
+
+  <div class="sec">
+    <div class="sec-label">边界数据 · 真实题库中的超长选项（悬挂缩进、第二行与正文左对齐）</div>
+    <section class="panel panel--flow">
+      <div class="panel-scroll" style="position: static; overflow: visible;">
+        <article class="item">
+          <div class="item-meta">
+            <span class="idx">01</span>
+            <span class="qtype"><i class="dot dot--single"></i>单选题</span>
+            <span class="meta-right">
+              <span class="pill pill--ans">答案 A</span>
+              <button class="copy-btn" aria-label="复制"><svg class="ic-15"><use href="#i-copy"/></svg></button>
+            </span>
+          </div>
+          <p class="stem">羽毛球单打比赛中，发球抢攻战术是指___</p>
+          <div class="opts">
+            <div class="opt is-key"><span class="opt-key">A．</span><span class="opt-text">以发网前球或平快球为主，限制对方进攻，迫使对方出高球。然后运用杀球和吊球攻击对方的弱点或空档。</span></div>
+            <div class="opt"><span class="opt-key">B．</span><span class="opt-text">先以快速而准确的落点控制对方场区四个角落，迫使对方前后左右地来回奔跑，当对方来不及回中心位置或失去身体平衡时，抓住空档和其弱点进行突击。</span></div>
+            <div class="opt"><span class="opt-key">C．</span><span class="opt-text">通过自身出球的节奏变化和良好的击球动作一致性，针对对方队员的某一个技术薄弱点，或击球后回中心位置较快的特点，重复地将球攻击到对方场上的某一区域。</span></div>
+          </div>
+        </article>
+      </div>
+    </section>
+  </div>
+</div>
+</body>
+</html>
